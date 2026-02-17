@@ -10,22 +10,13 @@ Point it at any git repository — it discovers all worktrees automatically, sho
 
 ```bash
 bun install
-bun run dev -- <path-to-git-repo>
+bun run dev -- ~/code/my-project
 ```
 
-Opens at `http://localhost:4040` by default.
-
-## Usage
+Opens at `http://localhost:4040`. Watch multiple repos at once:
 
 ```bash
-# Point at any repo with worktrees
-work-for-the-trees ~/code/my-project
-
-# Custom port
-work-for-the-trees ~/code/my-project --port 8080
-
-# Auto-open browser
-work-for-the-trees ~/code/my-project --open
+bun run dev -- ~/code/project-a ~/code/project-b --open
 ```
 
 ## How it works
