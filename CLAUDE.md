@@ -25,12 +25,12 @@ Browser-based dashboard for monitoring git worktrees and Claude Code plan files 
 
 ```bash
 bun install
-bun run dev -- ~/code/some-repo-with-worktrees
+bun run dev -- <path-to-git-repo>
 ```
 
-Custom port:
+Dashboard opens at `http://localhost:4040`. Custom port:
 ```bash
-bun run dev -- ~/code/my-project --port 3456
+bun run dev -- <path-to-git-repo> --port 8080
 ```
 
 ## Testing
