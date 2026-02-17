@@ -1,0 +1,20 @@
+{
+  "name": "work-for-the-trees",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "work-for-the-trees": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
