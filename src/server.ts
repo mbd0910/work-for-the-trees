@@ -4,7 +4,7 @@ import type { ServerWebSocket } from "bun";
 import { startWatching } from "./watcher.ts";
 import type { DashboardState } from "./git.ts";
 
-export function createApp(repoPath: string) {
+export function createApp(repoPaths: string[]) {
   const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
   const app = new Hono();
 
@@ -58,7 +58,7 @@ export function createApp(repoPath: string) {
 
   async function start(port: number) {
     const stopWatching = await startWatching({
-      repoPath,
+      repoPaths,
       onUpdate: broadcast,
     });
 
@@ -69,7 +69,9 @@ export function createApp(repoPath: string) {
     });
 
     console.log(`work-for-the-trees running at http://localhost:${server.port}`);
-    console.log(`Watching: ${repoPath}`);
+    for (const p of repoPaths) {
+      console.log(`Watching: ${p}`);
+    }
 
     return {
       stop: async () => {

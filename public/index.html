@@ -55,8 +55,46 @@
 
     .status-dot.connected { background: var(--status-in-progress); }
 
-    #repo-path { color: var(--text-muted); font-size: 12px; }
     #last-updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+    .repo-pills {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .repo-pill {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 2px 10px;
+    }
+
+    .repo-pill:hover { color: var(--text); border-color: var(--text-dim); }
+
+    .repo-pill.active {
+      background: var(--bg-card);
+      color: var(--text);
+      border-color: var(--text-dim);
+    }
+
+    .repo-heading {
+      grid-column: 1 / -1;
+      font-size: 13px;
+      color: var(--text-dim);
+      padding: 8px 0 0;
+      border-top: 1px solid var(--border);
+      margin-top: 4px;
+    }
+
+    .repo-heading:first-child {
+      border-top: none;
+      margin-top: 0;
+    }
 
     .card-grid {
       display: grid;
@@ -126,6 +164,13 @@
     .status-idle {
       background: color-mix(in srgb, var(--status-idle) 20%, transparent);
       color: var(--status-idle);
+    }
+
+    .uncommitted {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      gap: 8px;
     }
 
     .divergence { font-size: 12px; color: var(--text-muted); }
@@ -241,7 +286,7 @@
   <header>
     <h1>work-for-the-trees</h1>
     <span id="connection-status" class="status-dot"></span>
-    <span id="repo-path"></span>
+    <div id="repo-pills" class="repo-pills"></div>
     <span id="last-updated"></span>
   </header>
 
@@ -256,9 +301,11 @@
       const grid = document.getElementById("grid");
       const emptyState = document.getElementById("empty-state");
       const connectionDot = document.getElementById("connection-status");
-      const repoPathEl = document.getElementById("repo-path");
+      const repoPillsEl = document.getElementById("repo-pills");
       const lastUpdatedEl = document.getElementById("last-updated");
       const expandedPlans = new Set();
+      let currentState = null;
+      let activeRepo = "all"; // "all" or a repoName
 
       function connect() {
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -275,18 +322,54 @@
 
         ws.onmessage = (event) => {
           try {
-            render(JSON.parse(event.data));
+            currentState = JSON.parse(event.data);
+            render(currentState);
           } catch (err) {
             console.error("Failed to parse message:", err);
           }
         };
       }
 
+      function getRepoNames(state) {
+        const names = new Set();
+        for (const wt of state.worktrees) names.add(wt.repoName);
+        return [...names];
+      }
+
+      function renderPills(repoNames) {
+        if (repoNames.length <= 1) {
+          repoPillsEl.innerHTML = repoNames.length === 1
+            ? `<span style="color:var(--text-muted);font-size:12px">${esc(repoNames[0])}</span>`
+            : "";
+          return;
+        }
+
+        const pills = [`<button class="repo-pill${activeRepo === "all" ? " active" : ""}" data-repo="all">All</button>`];
+        for (const name of repoNames) {
+          const active = activeRepo === name ? " active" : "";
+          pills.push(`<button class="repo-pill${active}" data-repo="${esc(name)}">${esc(name)}</button>`);
+        }
+        repoPillsEl.innerHTML = pills.join("");
+
+        repoPillsEl.querySelectorAll(".repo-pill").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            activeRepo = btn.dataset.repo;
+            if (currentState) render(currentState);
+          });
+        });
+      }
+
       function render(state) {
-        repoPathEl.textContent = state.repoPath;
         lastUpdatedEl.textContent = "Updated " + new Date(state.updatedAt).toLocaleTimeString();
 
-        if (!state.worktrees || state.worktrees.length === 0) {
+        const repoNames = getRepoNames(state);
+        renderPills(repoNames);
+
+        const filtered = activeRepo === "all"
+          ? state.worktrees
+          : state.worktrees.filter((wt) => wt.repoName === activeRepo);
+
+        if (!filtered || filtered.length === 0) {
           grid.style.display = "none";
           emptyState.style.display = "block";
           return;
@@ -295,14 +378,30 @@
         grid.style.display = "grid";
         emptyState.style.display = "none";
 
-        const sorted = [...state.worktrees].sort((a, b) => {
+        // Group by repo, sorted within each group
+        const grouped = {};
+        for (const wt of filtered) {
+          if (!grouped[wt.repoName]) grouped[wt.repoName] = [];
+          grouped[wt.repoName].push(wt);
+        }
+
+        const statusOrder = { "in-progress": 0, "planning": 1, "idle": 2, "no-plan": 3 };
+        const sortWorktrees = (list) => [...list].sort((a, b) => {
           if (a.isMainWorktree) return 1;
           if (b.isMainWorktree) return -1;
-          const order = { "in-progress": 0, "planning": 1, "idle": 2, "no-plan": 3 };
-          return (order[a.status] ?? 4) - (order[b.status] ?? 4);
+          return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
         });
 
-        grid.innerHTML = sorted.map(renderCard).join("");
+        const showHeadings = repoNames.length > 1 && activeRepo === "all";
+        let html = "";
+        for (const repoName of Object.keys(grouped)) {
+          if (showHeadings) {
+            html += `<div class="repo-heading">${esc(repoName)}</div>`;
+          }
+          html += sortWorktrees(grouped[repoName]).map(renderCard).join("");
+        }
+
+        grid.innerHTML = html;
 
         grid.querySelectorAll(".plan-toggle").forEach((btn) => {
           btn.addEventListener("click", () => {
@@ -321,7 +420,6 @@
               arrow.classList.add("expanded");
             }
 
-            // Card spans full width if any of its plans are expanded
             const hasExpanded = card.querySelector(".plan-content.expanded");
             card.classList.toggle("plan-expanded", !!hasExpanded);
           });
@@ -351,10 +449,23 @@
               </div>
               <span class="status-badge ${statusClass}">${statusLabels[wt.status] || wt.status}</span>
             </div>
+            ${renderUncommitted(wt)}
             ${renderDivergence(wt)}
             ${renderPlans(wt)}
           </div>
         `;
+      }
+
+      function renderUncommitted(wt) {
+        const u = wt.uncommitted;
+        if (!u || (u.staged === 0 && u.unstaged === 0 && u.untracked === 0)) return "";
+
+        const parts = [];
+        if (u.staged > 0) parts.push(`<span class="file-added">${u.staged} staged</span>`);
+        if (u.unstaged > 0) parts.push(`<span class="file-modified">${u.unstaged} modified</span>`);
+        if (u.untracked > 0) parts.push(`<span class="file-deleted">${u.untracked} untracked</span>`);
+
+        return `<div class="uncommitted">${parts.join(" ")}</div>`;
       }
 
       function renderDivergence(wt) {

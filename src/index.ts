@@ -8,7 +8,7 @@ function printUsage() {
 work-for-the-trees - Monitor git worktrees and Claude Code plans
 
 Usage:
-  work-for-the-trees <repo-path> [options]
+  work-for-the-trees <repo-path> [repo-path...] [options]
 
 Options:
   --port <number>  Port to serve on (default: 4040)
@@ -17,12 +17,13 @@ Options:
 
 Example:
   work-for-the-trees ~/code/my-project
+  work-for-the-trees ~/code/project-a ~/code/project-b
   work-for-the-trees ~/code/my-project --port 8080 --open
 `.trim());
 }
 
 function parseArgs(args: string[]) {
-  let repoPath: string | null = null;
+  const repoPaths: string[] = [];
   let port = 4040;
   let open = false;
 
@@ -41,33 +42,39 @@ function parseArgs(args: string[]) {
       printUsage();
       process.exit(0);
     } else if (!arg.startsWith("--")) {
-      repoPath = arg;
+      repoPaths.push(resolve(arg));
     }
   }
 
-  if (!repoPath) {
-    console.error("Error: repo path is required\n");
+  if (repoPaths.length === 0) {
+    console.error("Error: at least one repo path is required\n");
     printUsage();
     process.exit(1);
   }
 
-  return { repoPath: resolve(repoPath), port, open };
+  return { repoPaths, port, open };
+}
+
+async function validateGitRepo(path: string): Promise<boolean> {
+  const proc = Bun.spawn(["git", "-C", path, "rev-parse", "--git-dir"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return (await proc.exited) === 0;
 }
 
 async function main() {
   const args = parseArgs(Bun.argv.slice(2));
 
-  // Validate it's a git repo
-  const proc = Bun.spawn(["git", "-C", args.repoPath, "rev-parse", "--git-dir"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if ((await proc.exited) !== 0) {
-    console.error(`Error: ${args.repoPath} is not a git repository`);
-    process.exit(1);
+  // Validate all paths are git repos
+  for (const repoPath of args.repoPaths) {
+    if (!(await validateGitRepo(repoPath))) {
+      console.error(`Error: ${repoPath} is not a git repository`);
+      process.exit(1);
+    }
   }
 
-  const { start } = createApp(args.repoPath);
+  const { start } = createApp(args.repoPaths);
   const { stop } = await start(args.port);
 
   if (args.open) {

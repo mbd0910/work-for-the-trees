@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 // --- Types ---
 
@@ -29,9 +29,17 @@ export interface PlanFile {
   modifiedAt: number;
 }
 
+export interface UncommittedChanges {
+  staged: number;
+  unstaged: number;
+  untracked: number;
+}
+
 export type WorktreeStatus = "no-plan" | "planning" | "in-progress" | "idle";
 
 export interface WorktreeData {
+  repoName: string;
+  repoPath: string;
   path: string;
   branch: string;
   baseBranch: string | null;
@@ -40,12 +48,13 @@ export interface WorktreeData {
   commitsAhead: number;
   commits: Commit[];
   fileChanges: FileChanges;
+  uncommitted: UncommittedChanges;
   planFiles: PlanFile[];
   lastCommitTimestamp: string | null;
 }
 
 export interface DashboardState {
-  repoPath: string;
+  repoPaths: string[];
   worktrees: WorktreeData[];
   updatedAt: string;
 }
@@ -195,6 +204,31 @@ export async function calculateDivergence(
   return { commitsAhead: commits.length, commits, fileChanges, lastCommitTimestamp };
 }
 
+export async function getUncommittedChanges(
+  worktreePath: string
+): Promise<UncommittedChanges> {
+  const output = await runGitSafe(worktreePath, [
+    "status",
+    "--porcelain",
+  ]);
+
+  const result: UncommittedChanges = { staged: 0, unstaged: 0, untracked: 0 };
+  if (!output?.trim()) return result;
+
+  for (const line of output.trim().split("\n")) {
+    const x = line[0]; // index (staged) status
+    const y = line[1]; // worktree (unstaged) status
+    if (x === "?" && y === "?") {
+      result.untracked++;
+    } else {
+      if (x && x !== " " && x !== "?") result.staged++;
+      if (y && y !== " " && y !== "?") result.unstaged++;
+    }
+  }
+
+  return result;
+}
+
 export async function findPlanFiles(
   worktreePath: string
 ): Promise<PlanFile[]> {
@@ -247,16 +281,16 @@ export function deriveStatus(
   return "in-progress";
 }
 
-export async function getFullState(
-  repoPath: string
-): Promise<DashboardState> {
+async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
+  const repoName = basename(repoPath);
   const worktrees = await discoverWorktrees(repoPath);
 
-  const worktreeData = await Promise.all(
+  return Promise.all(
     worktrees.map(async (wt): Promise<WorktreeData> => {
-      const [baseBranch, planFiles] = await Promise.all([
+      const [baseBranch, planFiles, uncommitted] = await Promise.all([
         detectBaseBranch(wt.path),
         findPlanFiles(wt.path),
+        getUncommittedChanges(wt.path),
       ]);
 
       let divergence = {
@@ -271,6 +305,8 @@ export async function getFullState(
       }
 
       return {
+        repoName,
+        repoPath,
         path: wt.path,
         branch: wt.branch,
         baseBranch,
@@ -281,14 +317,21 @@ export async function getFullState(
           divergence.lastCommitTimestamp
         ),
         ...divergence,
+        uncommitted,
         planFiles,
       };
     })
   );
+}
+
+export async function getFullState(
+  repoPaths: string[]
+): Promise<DashboardState> {
+  const allWorktrees = await Promise.all(repoPaths.map(getRepoWorktrees));
 
   return {
-    repoPath,
-    worktrees: worktreeData,
+    repoPaths,
+    worktrees: allWorktrees.flat(),
     updatedAt: new Date().toISOString(),
   };
 }
