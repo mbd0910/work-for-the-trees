@@ -5,6 +5,7 @@ import {
   getFullState,
   checkGhAvailable,
   checkPRState,
+  checkBehindRemote,
   applyRemoteState,
 } from "./git.ts";
 import type { DashboardState, PRState } from "./git.ts";
@@ -33,15 +34,15 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   } else {
     console.log("GitHub CLI not available — PR merge detection disabled");
   }
+  console.log("Remote behind-check enabled via git ls-remote (60s interval)");
 
-  // Remote state cache: "repoPath:branch" -> PRState
+  // Remote state caches
   const remoteCache = new Map<string, PRState | null>();
+  const behindRemoteCache = new Map<string, number | null>();
 
   // Initial state
   let currentState = await getFullState(repoPaths);
-  if (ghAvailable) {
-    currentState = applyRemoteState(currentState, remoteCache);
-  }
+  currentState = applyRemoteState(currentState, remoteCache, behindRemoteCache);
   onUpdate(currentState);
 
   // Set up chokidar for plan file directories across all repos
@@ -64,9 +65,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       let newState = await getFullState(repoPaths);
-      if (ghAvailable) {
-        newState = applyRemoteState(newState, remoteCache);
-      }
+      newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
       currentState = newState;
       onUpdate(currentState);
     }, DEBOUNCE_MS);
@@ -75,9 +74,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   // Fast poll for git changes (3s)
   const pollInterval = setInterval(async () => {
     let newState = await getFullState(repoPaths);
-    if (ghAvailable) {
-      newState = applyRemoteState(newState, remoteCache);
-    }
+    newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
 
     if (JSON.stringify(currentState) !== JSON.stringify(newState)) {
       currentState = newState;
@@ -93,39 +90,45 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
     }
   }, pollIntervalMs);
 
-  // Slow poll for remote PR state (60s), if gh is available
-  let remoteInterval: ReturnType<typeof setInterval> | null = null;
+  // Slow poll for remote checks (60s): PR state via gh + behind-remote via ls-remote
+  const refreshRemote = async () => {
+    const worktrees = currentState.worktrees;
 
-  if (ghAvailable) {
-    const refreshRemote = async () => {
-      const worktrees = currentState.worktrees.filter(
-        (wt) => !wt.isMainWorktree && wt.branch !== "(detached)"
-      );
+    await Promise.all([
+      // Check PR state for non-main worktrees (if gh available)
+      ...(ghAvailable
+        ? worktrees
+            .filter((wt) => !wt.isMainWorktree && wt.branch !== "(detached)")
+            .map(async (wt) => {
+              const prState = await checkPRState(wt.repoPath, wt.branch);
+              remoteCache.set(`${wt.repoPath}:${wt.branch}`, prState);
+            })
+        : []),
+      // Check behind-remote for main worktrees
+      ...worktrees
+        .filter((wt) => wt.isMainWorktree)
+        .map(async (wt) => {
+          const behind = await checkBehindRemote(wt.repoPath, wt.branch);
+          behindRemoteCache.set(`${wt.repoPath}:${wt.branch}`, behind);
+        }),
+    ]);
 
-      await Promise.all(
-        worktrees.map(async (wt) => {
-          const prState = await checkPRState(wt.repoPath, wt.branch);
-          remoteCache.set(`${wt.repoPath}:${wt.branch}`, prState);
-        })
-      );
+    // Re-apply remote state and broadcast if changed
+    const updated = applyRemoteState(currentState, remoteCache, behindRemoteCache);
+    if (JSON.stringify(currentState) !== JSON.stringify(updated)) {
+      currentState = updated;
+      onUpdate(currentState);
+    }
+  };
 
-      // Re-apply remote state and broadcast if changed
-      const updated = applyRemoteState(currentState, remoteCache);
-      if (JSON.stringify(currentState) !== JSON.stringify(updated)) {
-        currentState = updated;
-        onUpdate(currentState);
-      }
-    };
-
-    // Run immediately, then on interval
-    refreshRemote();
-    remoteInterval = setInterval(refreshRemote, remoteCheckIntervalMs);
-  }
+  // Run immediately, then on interval
+  refreshRemote();
+  const remoteInterval = setInterval(refreshRemote, remoteCheckIntervalMs);
 
   // Cleanup
   return async () => {
     clearInterval(pollInterval);
-    if (remoteInterval) clearInterval(remoteInterval);
+    clearInterval(remoteInterval);
     if (debounceTimer) clearTimeout(debounceTimer);
     await watcher.close();
   };

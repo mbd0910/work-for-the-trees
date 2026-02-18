@@ -55,6 +55,7 @@ export interface WorktreeData {
   lastCommitTimestamp: string | null;
   mergedLocally: boolean;
   prState: PRState | null;
+  behindRemote: number | null;
 }
 
 export interface DashboardState {
@@ -313,6 +314,41 @@ export async function checkLocallyMerged(
   return isAncestor !== null;
 }
 
+export async function checkBehindRemote(
+  repoPath: string,
+  branch: string
+): Promise<number | null> {
+  // Get the remote SHA via network (read-only, no local writes)
+  const lsOutput = await runGitSafe(repoPath, ["ls-remote", "origin", branch]);
+  if (!lsOutput?.trim()) return null;
+
+  const remoteSha = lsOutput.trim().split(/\s+/)[0];
+  if (!remoteSha) return null;
+
+  // Get local HEAD
+  const localSha = await runGitSafe(repoPath, ["rev-parse", "HEAD"]);
+  if (!localSha) return null;
+
+  // If same SHA, we're up to date
+  if (remoteSha === localSha.trim()) return 0;
+
+  // Check if we have the remote object locally
+  const hasObject = await runGitSafe(repoPath, ["cat-file", "-e", remoteSha]);
+  if (hasObject === null) {
+    // We don't have the object — we know we're behind but can't count
+    return -1; // sentinel: behind by unknown amount
+  }
+
+  // We have the object — count the gap
+  const countStr = await runGitSafe(repoPath, [
+    "rev-list",
+    "--count",
+    `HEAD..${remoteSha}`,
+  ]);
+  if (!countStr) return null;
+  return parseInt(countStr.trim(), 10);
+}
+
 export async function checkGhAvailable(): Promise<boolean> {
   try {
     const proc = Bun.spawn(["gh", "auth", "status"], {
@@ -350,13 +386,15 @@ export async function checkPRState(
 
 export function applyRemoteState(
   state: DashboardState,
-  remoteCache: Map<string, PRState | null>
+  remoteCache: Map<string, PRState | null>,
+  behindRemoteCache: Map<string, number | null> = new Map()
 ): DashboardState {
   return {
     ...state,
     worktrees: state.worktrees.map((wt) => {
       const key = `${wt.repoPath}:${wt.branch}`;
       const prState = remoteCache.get(key) ?? wt.prState;
+      const behindRemote = behindRemoteCache.get(key) ?? wt.behindRemote;
       const status = deriveStatus(
         wt.planFiles,
         wt.commitsAhead,
@@ -364,7 +402,7 @@ export function applyRemoteState(
         wt.mergedLocally,
         prState
       );
-      return { ...wt, prState, status };
+      return { ...wt, prState, behindRemote, status };
     }),
   };
 }
@@ -415,6 +453,7 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
         planFiles,
         mergedLocally,
         prState: null,
+        behindRemote: null,
       };
     })
   );
