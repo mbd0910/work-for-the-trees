@@ -30,10 +30,24 @@ export function createApp(repoPaths: string[]) {
     return c.html(await file.text());
   });
 
-  // Debug endpoint
+  // Full state API
   app.get("/api/state", (c) => {
     if (currentState) return c.json(currentState);
     return c.json({ error: "Not ready" }, 503);
+  });
+
+  // Merged worktrees API — slim shape for cleanup automation
+  app.get("/api/merged", (c) => {
+    if (!currentState) return c.json({ error: "Not ready" }, 503);
+    const merged = currentState.worktrees
+      .filter((wt) => wt.status === "merged")
+      .map((wt) => ({
+        repo: wt.repoName,
+        branch: wt.branch,
+        path: wt.path,
+        repoPath: wt.repoPath,
+      }));
+    return c.json(merged);
   });
 
   // WebSocket endpoint
