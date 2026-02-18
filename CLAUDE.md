@@ -20,9 +20,9 @@ No test suite yet — manual testing by pointing at repos with active worktrees.
 
 The data flows in one direction: **git CLI → git.ts → watcher.ts → server.ts → WebSocket → browser**.
 
-- **`src/git.ts`** — Pure data layer. All types are defined here (`DashboardState`, `WorktreeData`, `PRState`, etc.). Every function takes explicit params and uses `Bun.spawn` to call git (and `gh` for PR state). The key orchestrator is `getFullState(repoPaths)` which discovers worktrees across all repos in parallel, then fetches base branch, plan files, divergence, uncommitted changes, and local merge status for each worktree concurrently via `Promise.all`. Remote PR state is managed separately via `checkPRState`/`applyRemoteState`.
+- **`src/git.ts`** — Pure data layer. All types are defined here (`DashboardState`, `WorktreeData`, `PRState`, etc.). Every function takes explicit params and uses `Bun.spawn` to call git (and `gh` for PR state). The key orchestrator is `getFullState(repoPaths)` which discovers worktrees across all repos in parallel, then fetches base branch, plan files, divergence, uncommitted changes, and local merge status for each worktree concurrently via `Promise.all`. Remote PR state is managed separately via `checkPRState`/`applyRemoteState`. Plan discovery uses `buildPlanMapping` to find plans in Claude Code's global `~/.claude/plans/` directory (see Plan File Discovery below).
 
-- **`src/watcher.ts`** — Three update mechanisms feed into a single `onUpdate` callback: chokidar watches `.claude/plans/` directories for instant plan file changes (debounced 300ms), a fast polling interval (3s) calls `getFullState` for git data, and a slow polling interval (60s) checks GitHub PR merge status via `gh` CLI. The remote cache is merged into state before broadcasting. Change detection uses `JSON.stringify` comparison to avoid no-op broadcasts. New worktrees are automatically picked up and their plan dirs added to chokidar.
+- **`src/watcher.ts`** — Three update mechanisms feed into a single `onUpdate` callback: chokidar watches `.claude/plans/` directories (both per-worktree and global `~/.claude/plans/`) for instant plan file changes (debounced 300ms), a fast polling interval (3s) calls `getFullState` for git data, and a slow polling interval (60s) checks GitHub PR merge status via `gh` CLI and rebuilds the plan mapping cache. The remote cache and plan mapping are merged into state before broadcasting. Change detection uses `JSON.stringify` comparison to avoid no-op broadcasts. New worktrees are automatically picked up and their plan dirs added to chokidar.
 
 - **`src/server.ts`** — Hono app with `createBunWebSocket`. Tracks WebSocket clients in a `Set`. The watcher's `onUpdate` callback broadcasts state to all clients. New connections receive the current state immediately in `onOpen`. Endpoints: `GET /api/state` (full dashboard state), `GET /api/merged` (slim list of merged worktrees for cleanup automation).
 
@@ -37,6 +37,10 @@ The data flows in one direction: **git CLI → git.ts → watcher.ts → server.
 - `runGitSafe` pattern: returns `null` on failure instead of throwing, enabling graceful degradation
 - Frontend is vanilla HTML/CSS/JS with no build step — no framework, no bundler
 - Dark mode only, monospace font, GitHub-dark-inspired color palette
+
+## Plan file discovery
+
+Claude Code stores plan files globally in `~/.claude/plans/` with random names (e.g., `rosy-nibbling-puppy.md`) — not inside each worktree. To map plans back to worktrees, `buildPlanMapping` encodes each worktree path (replacing `/` with `-`) to find its project directory at `~/.claude/projects/<encoded-path>/`, then greps the 3 most recent session `.jsonl` files for plan file references. This mapping is cached and rebuilt every 60s. The assumption is that Claude Code uses the default `~/.claude/plans/` location — custom `plansDirectory` settings are not currently handled.
 
 ## Critical constraint
 

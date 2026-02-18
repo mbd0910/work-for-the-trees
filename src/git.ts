@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 // --- Types ---
@@ -240,35 +241,109 @@ export async function getUncommittedChanges(
   return result;
 }
 
-export async function findPlanFiles(
-  worktreePath: string
-): Promise<PlanFile[]> {
-  const plansDir = join(worktreePath, ".claude", "plans");
+export async function buildPlanMapping(
+  worktreePaths: string[]
+): Promise<Map<string, string[]>> {
+  const home = homedir();
+  const projectsDir = join(home, ".claude", "projects");
+  const mapping = new Map<string, string[]>();
 
+  await Promise.all(
+    worktreePaths.map(async (wtPath) => {
+      const encoded = wtPath.replaceAll("/", "-");
+      const projectDir = join(projectsDir, encoded);
+
+      try {
+        const entries = await readdir(projectDir);
+        const jsonlFiles = entries.filter((f) => f.endsWith(".jsonl"));
+        if (jsonlFiles.length === 0) return;
+
+        // Sort by mtime descending, take the 3 most recent
+        const withStats = await Promise.all(
+          jsonlFiles.map(async (f) => {
+            const s = await stat(join(projectDir, f));
+            return { file: f, mtime: s.mtimeMs };
+          })
+        );
+        withStats.sort((a, b) => b.mtime - a.mtime);
+
+        const planNames = new Set<string>();
+        for (const { file } of withStats.slice(0, 3)) {
+          try {
+            const proc = Bun.spawn(
+              ["grep", "-oE", "\\.claude/plans/[a-zA-Z0-9_-]+\\.md", join(projectDir, file)],
+              { stdout: "pipe", stderr: "pipe" }
+            );
+            const output = await new Response(proc.stdout).text();
+            await proc.exited;
+            for (const line of output.trim().split("\n")) {
+              if (!line) continue;
+              const filename = line.split("/").pop();
+              if (filename) planNames.add(filename);
+            }
+          } catch {}
+        }
+
+        if (planNames.size > 0) {
+          mapping.set(wtPath, [...planNames]);
+        }
+      } catch {}
+    })
+  );
+
+  return mapping;
+}
+
+export async function findPlanFiles(
+  worktreePath: string,
+  globalPlanNames?: string[]
+): Promise<PlanFile[]> {
+  const results: PlanFile[] = [];
+
+  // 1. Check local worktree plans (existing behavior)
+  const plansDir = join(worktreePath, ".claude", "plans");
   try {
     const entries = await readdir(plansDir);
     const mdFiles = entries.filter((f) => f.endsWith(".md"));
 
-    const planFiles = await Promise.all(
+    const localPlans = await Promise.all(
       mdFiles.map(async (filename) => {
         const filePath = join(plansDir, filename);
         const [content, fileStat] = await Promise.all([
           Bun.file(filePath).text(),
           stat(filePath),
         ]);
-        return {
-          filename,
-          path: filePath,
-          content,
-          modifiedAt: fileStat.mtimeMs,
-        };
+        return { filename, path: filePath, content, modifiedAt: fileStat.mtimeMs };
       })
     );
+    results.push(...localPlans);
+  } catch {}
 
-    return planFiles.sort((a, b) => b.modifiedAt - a.modifiedAt);
-  } catch {
-    return [];
+  // 2. Check global plans from ~/.claude/plans/
+  if (globalPlanNames?.length) {
+    const globalPlansDir = join(homedir(), ".claude", "plans");
+    const localFilenames = new Set(results.map((r) => r.filename));
+
+    const globalPlans = await Promise.all(
+      globalPlanNames
+        .filter((f) => !localFilenames.has(f))
+        .map(async (filename) => {
+          try {
+            const filePath = join(globalPlansDir, filename);
+            const [content, fileStat] = await Promise.all([
+              Bun.file(filePath).text(),
+              stat(filePath),
+            ]);
+            return { filename, path: filePath, content, modifiedAt: fileStat.mtimeMs };
+          } catch {
+            return null;
+          }
+        })
+    );
+    results.push(...globalPlans.filter((p): p is PlanFile => p !== null));
   }
+
+  return results.sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
 export function deriveStatus(
@@ -418,7 +493,10 @@ export function applyRemoteState(
   };
 }
 
-async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
+async function getRepoWorktrees(
+  repoPath: string,
+  planMapping?: Map<string, string[]>
+): Promise<WorktreeData[]> {
   const repoName = basename(repoPath);
   const worktrees = await discoverWorktrees(repoPath);
 
@@ -426,7 +504,7 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
     worktrees.map(async (wt): Promise<WorktreeData> => {
       const [baseBranch, planFiles, uncommitted] = await Promise.all([
         detectBaseBranch(wt.path),
-        findPlanFiles(wt.path),
+        findPlanFiles(wt.path, planMapping?.get(wt.path)),
         getUncommittedChanges(wt.path),
       ]);
 
@@ -471,9 +549,12 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
 }
 
 export async function getFullState(
-  repoPaths: string[]
+  repoPaths: string[],
+  planMapping?: Map<string, string[]>
 ): Promise<DashboardState> {
-  const allWorktrees = await Promise.all(repoPaths.map(getRepoWorktrees));
+  const allWorktrees = await Promise.all(
+    repoPaths.map((rp) => getRepoWorktrees(rp, planMapping))
+  );
 
   return {
     repoPaths,

@@ -1,8 +1,10 @@
 import chokidar from "chokidar";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   discoverWorktrees,
   getFullState,
+  buildPlanMapping,
   checkGhAvailable,
   checkPR,
   checkBehindRemote,
@@ -40,16 +42,24 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   const remoteCache = new Map<string, PRInfo | null>();
   const behindRemoteCache = new Map<string, number | null>();
 
+  // Plan mapping cache: worktree path → global plan filenames
+  const allWorktrees = await Promise.all(repoPaths.map(discoverWorktrees));
+  const worktreePaths = allWorktrees.flat().map((wt) => wt.path);
+  let planMapping = await buildPlanMapping(worktreePaths);
+  const planCount = [...planMapping.values()].reduce((sum, v) => sum + v.length, 0);
+  console.log(`Plan mapping: found ${planCount} plan(s) across ${planMapping.size} worktree(s)`);
+
   // Initial state
-  let currentState = await getFullState(repoPaths);
+  let currentState = await getFullState(repoPaths, planMapping);
   currentState = applyRemoteState(currentState, remoteCache, behindRemoteCache);
   onUpdate(currentState);
 
-  // Set up chokidar for plan file directories across all repos
-  const allWorktrees = await Promise.all(repoPaths.map(discoverWorktrees));
-  const planDirs = allWorktrees
-    .flat()
-    .map((wt) => join(wt.path, ".claude", "plans"));
+  // Set up chokidar for plan file directories across all repos + global plans dir
+  const globalPlansDir = join(homedir(), ".claude", "plans");
+  const planDirs = [
+    ...allWorktrees.flat().map((wt) => join(wt.path, ".claude", "plans")),
+    globalPlansDir,
+  ];
 
   const watcher = chokidar.watch(planDirs, {
     ignoreInitial: true,
@@ -64,7 +74,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   watcher.on("all", () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
-      let newState = await getFullState(repoPaths);
+      let newState = await getFullState(repoPaths, planMapping);
       newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
       newState.remoteCheckedAt = currentState.remoteCheckedAt;
       currentState = newState;
@@ -74,7 +84,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
 
   // Fast poll for git changes (3s)
   const pollInterval = setInterval(async () => {
-    let newState = await getFullState(repoPaths);
+    let newState = await getFullState(repoPaths, planMapping);
     newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
     newState.remoteCheckedAt = currentState.remoteCheckedAt;
 
@@ -92,28 +102,34 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
     }
   }, pollIntervalMs);
 
-  // Slow poll for remote checks (60s): PR state via gh + behind-remote via ls-remote
+  // Slow poll for remote checks (60s): PR state via gh + behind-remote via ls-remote + plan mapping
   const refreshRemote = async () => {
     const worktrees = currentState.worktrees;
 
-    await Promise.all([
-      // Check PR state for non-main worktrees (if gh available)
-      ...(ghAvailable
-        ? worktrees
-            .filter((wt) => !wt.isMainWorktree && wt.branch !== "(detached)")
-            .map(async (wt) => {
-              const pr = await checkPR(wt.repoPath, wt.branch);
-              remoteCache.set(`${wt.repoPath}:${wt.branch}`, pr);
-            })
-        : []),
-      // Check behind-remote for main worktrees
-      ...worktrees
-        .filter((wt) => wt.isMainWorktree)
-        .map(async (wt) => {
-          const behind = await checkBehindRemote(wt.repoPath, wt.branch);
-          behindRemoteCache.set(`${wt.repoPath}:${wt.branch}`, behind);
-        }),
+    // Rebuild plan mapping alongside remote checks
+    const currentWorktreePaths = worktrees.map((wt) => wt.path);
+    const [, newPlanMapping] = await Promise.all([
+      Promise.all([
+        // Check PR state for non-main worktrees (if gh available)
+        ...(ghAvailable
+          ? worktrees
+              .filter((wt) => !wt.isMainWorktree && wt.branch !== "(detached)")
+              .map(async (wt) => {
+                const pr = await checkPR(wt.repoPath, wt.branch);
+                remoteCache.set(`${wt.repoPath}:${wt.branch}`, pr);
+              })
+          : []),
+        // Check behind-remote for main worktrees
+        ...worktrees
+          .filter((wt) => wt.isMainWorktree)
+          .map(async (wt) => {
+            const behind = await checkBehindRemote(wt.repoPath, wt.branch);
+            behindRemoteCache.set(`${wt.repoPath}:${wt.branch}`, behind);
+          }),
+      ]),
+      buildPlanMapping(currentWorktreePaths),
     ]);
+    planMapping = newPlanMapping;
 
     // Re-apply remote state and broadcast if changed
     const updated = applyRemoteState(currentState, remoteCache, behindRemoteCache);
