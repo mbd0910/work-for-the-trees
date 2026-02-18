@@ -66,6 +66,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
     debounceTimer = setTimeout(async () => {
       let newState = await getFullState(repoPaths);
       newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
+      newState.remoteCheckedAt = currentState.remoteCheckedAt;
       currentState = newState;
       onUpdate(currentState);
     }, DEBOUNCE_MS);
@@ -75,6 +76,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   const pollInterval = setInterval(async () => {
     let newState = await getFullState(repoPaths);
     newState = applyRemoteState(newState, remoteCache, behindRemoteCache);
+    newState.remoteCheckedAt = currentState.remoteCheckedAt;
 
     if (JSON.stringify(currentState) !== JSON.stringify(newState)) {
       currentState = newState;
@@ -115,6 +117,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
 
     // Re-apply remote state and broadcast if changed
     const updated = applyRemoteState(currentState, remoteCache, behindRemoteCache);
+    updated.remoteCheckedAt = new Date().toISOString();
     if (JSON.stringify(currentState) !== JSON.stringify(updated)) {
       currentState = updated;
       onUpdate(currentState);

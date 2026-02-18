@@ -56,7 +56,27 @@
 
     .status-dot.connected { background: var(--status-in-progress); }
 
-    #last-updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+    #last-updated {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 11px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    #last-updated .poll-label {
+      color: var(--text-muted);
+    }
+
+    #last-updated .poll-divider {
+      color: var(--border);
+    }
 
     .repo-pills {
       display: flex;
@@ -309,7 +329,7 @@
     <h1>work-for-the-trees</h1>
     <span id="connection-status" class="status-dot"></span>
     <div id="repo-pills" class="repo-pills"></div>
-    <span id="last-updated"></span>
+    <div id="last-updated"></div>
   </header>
 
   <main id="grid" class="card-grid"></main>
@@ -382,7 +402,14 @@
       }
 
       function render(state) {
-        lastUpdatedEl.textContent = "Updated " + new Date(state.updatedAt).toLocaleTimeString();
+        const gitTime = new Date(state.updatedAt).toLocaleTimeString();
+        const remoteTime = state.remoteCheckedAt
+          ? new Date(state.remoteCheckedAt).toLocaleTimeString()
+          : "pending\u2026";
+        lastUpdatedEl.innerHTML =
+          `<span><span class="poll-label">git</span> ${gitTime}</span>` +
+          `<span class="poll-divider">|</span>` +
+          `<span><span class="poll-label">remote</span> ${remoteTime}</span>`;
 
         const repoNames = getRepoNames(state);
         renderPills(repoNames);

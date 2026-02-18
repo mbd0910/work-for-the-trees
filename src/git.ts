@@ -62,6 +62,7 @@ export interface DashboardState {
   repoPaths: string[];
   worktrees: WorktreeData[];
   updatedAt: string;
+  remoteCheckedAt: string | null;
 }
 
 // --- Git helpers ---
@@ -468,5 +469,6 @@ export async function getFullState(
     repoPaths,
     worktrees: allWorktrees.flat(),
     updatedAt: new Date().toISOString(),
+    remoteCheckedAt: null,
   };
 }
