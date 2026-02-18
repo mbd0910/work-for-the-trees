@@ -43,6 +43,21 @@ If the [GitHub CLI](https://cli.github.com/) (`gh`) is installed and authenticat
 
 Without `gh`, merge detection falls back to local-only ancestry checks (which only detect regular merges after pulling the base branch).
 
+## API
+
+The dashboard exposes JSON endpoints for external tooling and automation:
+
+- **`GET /api/state`** — full dashboard state (all worktrees with status, divergence, PR state, etc.)
+- **`GET /api/merged`** — just the merged worktrees, slim shape for cleanup scripts:
+  ```json
+  [{ "repo": "my-project", "branch": "feature-x", "path": "/home/user/...", "repoPath": "/home/user/..." }]
+  ```
+
+Example — clean up all merged worktrees for a repo:
+```bash
+curl -s localhost:4040/api/merged | jq -r '.[].path' | xargs -I{} git worktree remove {}
+```
+
 ## Tech stack
 
 Bun, Hono, chokidar, vanilla HTML/CSS/JS. No build step.
