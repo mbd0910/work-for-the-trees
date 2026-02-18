@@ -20,9 +20,9 @@ No test suite yet — manual testing by pointing at repos with active worktrees.
 
 The data flows in one direction: **git CLI → git.ts → watcher.ts → server.ts → WebSocket → browser**.
 
-- **`src/git.ts`** — Pure data layer. All types are defined here (`DashboardState`, `WorktreeData`, etc.). Every function takes explicit params and uses `Bun.spawn` to call git. The key orchestrator is `getFullState(repoPaths)` which discovers worktrees across all repos in parallel, then fetches base branch, plan files, divergence, and uncommitted changes for each worktree concurrently via `Promise.all`.
+- **`src/git.ts`** — Pure data layer. All types are defined here (`DashboardState`, `WorktreeData`, `PRState`, etc.). Every function takes explicit params and uses `Bun.spawn` to call git (and `gh` for PR state). The key orchestrator is `getFullState(repoPaths)` which discovers worktrees across all repos in parallel, then fetches base branch, plan files, divergence, uncommitted changes, and local merge status for each worktree concurrently via `Promise.all`. Remote PR state is managed separately via `checkPRState`/`applyRemoteState`.
 
-- **`src/watcher.ts`** — Two update mechanisms feed into a single `onUpdate` callback: chokidar watches `.claude/plans/` directories for instant plan file changes (debounced 300ms), and a polling interval (3s) calls `getFullState` for git data. Change detection uses `JSON.stringify` comparison to avoid no-op broadcasts. New worktrees are automatically picked up and their plan dirs added to chokidar.
+- **`src/watcher.ts`** — Three update mechanisms feed into a single `onUpdate` callback: chokidar watches `.claude/plans/` directories for instant plan file changes (debounced 300ms), a fast polling interval (3s) calls `getFullState` for git data, and a slow polling interval (60s) checks GitHub PR merge status via `gh` CLI. The remote cache is merged into state before broadcasting. Change detection uses `JSON.stringify` comparison to avoid no-op broadcasts. New worktrees are automatically picked up and their plan dirs added to chokidar.
 
 - **`src/server.ts`** — Hono app with `createBunWebSocket`. Tracks WebSocket clients in a `Set`. The watcher's `onUpdate` callback broadcasts state to all clients. New connections receive the current state immediately in `onOpen`. Debug endpoint at `GET /api/state`.
 
@@ -40,4 +40,8 @@ The data flows in one direction: **git CLI → git.ts → watcher.ts → server.
 
 ## Critical constraint
 
-This is a **read-only** tool. It must NEVER write to, modify, or interfere with any watched repository. All git commands are read-only (`worktree list`, `log`, `diff`, `status`, `rev-parse`, `merge-base`, `rev-list`). All file access is read-only.
+This is a **read-only** tool. It must NEVER write to, modify, or interfere with any watched repository. All git commands are read-only (`worktree list`, `log`, `diff`, `status`, `rev-parse`, `merge-base`, `rev-list`). All file access is read-only. The `gh pr view` command is also read-only (queries GitHub API, no local writes).
+
+## Optional dependency
+
+The [GitHub CLI](https://cli.github.com/) (`gh`) enables PR merge detection (including squash merges). If `gh` is not installed or not authenticated, the feature degrades gracefully to local-only merge detection.

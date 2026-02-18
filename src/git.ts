@@ -35,7 +35,9 @@ export interface UncommittedChanges {
   untracked: number;
 }
 
-export type WorktreeStatus = "no-plan" | "planning" | "in-progress" | "idle";
+export type WorktreeStatus = "no-plan" | "planning" | "in-progress" | "idle" | "merged";
+
+export type PRState = "merged" | "open" | "closed";
 
 export interface WorktreeData {
   repoName: string;
@@ -51,6 +53,8 @@ export interface WorktreeData {
   uncommitted: UncommittedChanges;
   planFiles: PlanFile[];
   lastCommitTimestamp: string | null;
+  mergedLocally: boolean;
+  prState: PRState | null;
 }
 
 export interface DashboardState {
@@ -264,8 +268,12 @@ export function deriveStatus(
   planFiles: PlanFile[],
   commitsAhead: number,
   lastCommitTimestamp: string | null,
+  mergedLocally: boolean = false,
+  prState: PRState | null = null,
   idleThresholdMs: number = 5 * 60 * 1000
 ): WorktreeStatus {
+  if (mergedLocally || prState === "merged") return "merged";
+
   const hasPlans = planFiles.length > 0;
   const hasCommits = commitsAhead > 0;
 
@@ -279,6 +287,86 @@ export function deriveStatus(
   }
 
   return "in-progress";
+}
+
+export async function checkLocallyMerged(
+  worktreePath: string,
+  baseBranch: string
+): Promise<boolean> {
+  const [branchHead, mergeBase] = await Promise.all([
+    runGitSafe(worktreePath, ["rev-parse", "HEAD"]),
+    runGitSafe(worktreePath, ["merge-base", "HEAD", baseBranch]),
+  ]);
+  if (!branchHead || !mergeBase) return false;
+
+  // If HEAD == merge-base, branch was just created (no unique commits)
+  if (branchHead.trim() === mergeBase.trim()) return false;
+
+  // Branch has unique commits — check if they're all in baseBranch
+  const isAncestor = await runGitSafe(worktreePath, [
+    "merge-base",
+    "--is-ancestor",
+    "HEAD",
+    baseBranch,
+  ]);
+  // merge-base --is-ancestor exits 0 if true (runGitSafe returns output), 1 if false (returns null)
+  return isAncestor !== null;
+}
+
+export async function checkGhAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["gh", "auth", "status"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return (await proc.exited) === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkPRState(
+  repoPath: string,
+  branch: string
+): Promise<PRState | null> {
+  try {
+    const proc = Bun.spawn(
+      ["gh", "pr", "view", branch, "--json", "state", "-q", ".state"],
+      { cwd: repoPath, stdout: "pipe", stderr: "pipe" }
+    );
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) return null;
+
+    const state = output.trim().toUpperCase();
+    if (state === "MERGED") return "merged";
+    if (state === "OPEN") return "open";
+    if (state === "CLOSED") return "closed";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function applyRemoteState(
+  state: DashboardState,
+  remoteCache: Map<string, PRState | null>
+): DashboardState {
+  return {
+    ...state,
+    worktrees: state.worktrees.map((wt) => {
+      const key = `${wt.repoPath}:${wt.branch}`;
+      const prState = remoteCache.get(key) ?? wt.prState;
+      const status = deriveStatus(
+        wt.planFiles,
+        wt.commitsAhead,
+        wt.lastCommitTimestamp,
+        wt.mergedLocally,
+        prState
+      );
+      return { ...wt, prState, status };
+    }),
+  };
 }
 
 async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
@@ -300,8 +388,13 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
         lastCommitTimestamp: null as string | null,
       };
 
+      let mergedLocally = false;
+
       if (baseBranch && !wt.isMainWorktree) {
-        divergence = await calculateDivergence(wt.path, baseBranch);
+        [divergence, mergedLocally] = await Promise.all([
+          calculateDivergence(wt.path, baseBranch),
+          checkLocallyMerged(wt.path, baseBranch),
+        ]);
       }
 
       return {
@@ -314,11 +407,14 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
         status: deriveStatus(
           planFiles,
           divergence.commitsAhead,
-          divergence.lastCommitTimestamp
+          divergence.lastCommitTimestamp,
+          mergedLocally
         ),
         ...divergence,
         uncommitted,
         planFiles,
+        mergedLocally,
+        prState: null,
       };
     })
   );

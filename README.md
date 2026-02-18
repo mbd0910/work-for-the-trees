@@ -35,6 +35,13 @@ bun run dev -- ~/code/project-a ~/code/project-b --open
 | **Planning** | Plan file(s) exist, zero commits ahead |
 | **In progress** | Commits ahead of base branch |
 | **Idle** | In progress but last commit >5 minutes ago |
+| **Merged** | Branch PR merged on GitHub, or branch merged into local base |
+
+## PR merge detection
+
+If the [GitHub CLI](https://cli.github.com/) (`gh`) is installed and authenticated, the dashboard automatically detects when a worktree's branch has been merged via pull request — including squash merges. This runs on a 60-second polling interval to stay within API rate limits.
+
+Without `gh`, merge detection falls back to local-only ancestry checks (which only detect regular merges after pulling the base branch).
 
 ## Tech stack
 

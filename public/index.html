@@ -19,6 +19,7 @@
       --status-planning: #d29922;
       --status-in-progress: #3fb950;
       --status-idle: #f85149;
+      --status-merged: #8957e5;
       --font-mono: "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
     }
 
@@ -164,6 +165,14 @@
     .status-idle {
       background: color-mix(in srgb, var(--status-idle) 20%, transparent);
       color: var(--status-idle);
+    }
+    .status-merged {
+      background: color-mix(in srgb, var(--status-merged) 20%, transparent);
+      color: var(--status-merged);
+    }
+
+    .card.merged-worktree {
+      border-left: 3px solid var(--status-merged);
     }
 
     .uncommitted {
@@ -387,7 +396,7 @@
           grouped[wt.repoName].push(wt);
         }
 
-        const statusOrder = { "in-progress": 0, "planning": 1, "idle": 2, "no-plan": 3 };
+        const statusOrder = { "in-progress": 0, "planning": 1, "idle": 2, "no-plan": 3, "merged": 4 };
         const sortWorktrees = (list) => [...list].sort((a, b) => {
           if (a.isMainWorktree) return 1;
           if (b.isMainWorktree) return -1;
@@ -430,6 +439,7 @@
 
       function renderCard(wt) {
         const mainClass = wt.isMainWorktree ? " main-worktree" : "";
+        const mergedClass = wt.status === "merged" ? " merged-worktree" : "";
         const hasExpandedPlan = wt.planFiles.some(
           (p) => expandedPlans.has(wt.branch + ":" + p.filename)
         );
@@ -440,10 +450,11 @@
           "planning": "Planning",
           "in-progress": "In progress",
           "idle": "Idle",
+          "merged": "Merged",
         };
 
         return `
-          <div class="card${mainClass}${expandedCardClass}">
+          <div class="card${mainClass}${mergedClass}${expandedCardClass}">
             <div class="card-header">
               <div>
                 <div class="branch-name">${esc(wt.branch)}</div>
