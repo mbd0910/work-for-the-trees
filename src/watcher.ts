@@ -4,11 +4,11 @@ import {
   discoverWorktrees,
   getFullState,
   checkGhAvailable,
-  checkPRState,
+  checkPR,
   checkBehindRemote,
   applyRemoteState,
 } from "./git.ts";
-import type { DashboardState, PRState } from "./git.ts";
+import type { DashboardState, PRInfo } from "./git.ts";
 
 export interface WatcherOptions {
   repoPaths: string[];
@@ -37,7 +37,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   console.log("Remote behind-check enabled via git ls-remote (60s interval)");
 
   // Remote state caches
-  const remoteCache = new Map<string, PRState | null>();
+  const remoteCache = new Map<string, PRInfo | null>();
   const behindRemoteCache = new Map<string, number | null>();
 
   // Initial state
@@ -102,8 +102,8 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
         ? worktrees
             .filter((wt) => !wt.isMainWorktree && wt.branch !== "(detached)")
             .map(async (wt) => {
-              const prState = await checkPRState(wt.repoPath, wt.branch);
-              remoteCache.set(`${wt.repoPath}:${wt.branch}`, prState);
+              const pr = await checkPR(wt.repoPath, wt.branch);
+              remoteCache.set(`${wt.repoPath}:${wt.branch}`, pr);
             })
         : []),
       // Check behind-remote for main worktrees

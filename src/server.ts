@@ -46,6 +46,7 @@ export function createApp(repoPaths: string[]) {
         branch: wt.branch,
         path: wt.path,
         repoPath: wt.repoPath,
+        pr: wt.pr,
       }));
     return c.json(merged);
   });

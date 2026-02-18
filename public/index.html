@@ -154,6 +154,18 @@
       margin-top: 2px;
     }
 
+    .pr-link {
+      font-size: 12px;
+      margin-top: 2px;
+      text-decoration: none;
+      display: block;
+    }
+
+    .pr-link:hover { text-decoration: underline; }
+    .pr-link.pr-open { color: var(--status-in-progress); }
+    .pr-link.pr-merged { color: var(--status-merged); }
+    .pr-link.pr-closed { color: var(--status-idle); }
+
     .card-header {
       display: flex;
       justify-content: space-between;
@@ -499,12 +511,17 @@
             ? `<div class="behind-remote">${behindCount} commit${behindCount !== 1 ? "s" : ""} behind origin/${esc(wt.branch)} — pull to update</div>`
             : "";
 
+        const prHtml = wt.pr
+          ? `<a class="pr-link pr-${wt.pr.state}" href="${esc(wt.pr.url)}" target="_blank">PR #${wt.pr.number}: ${esc(wt.pr.title)}</a>`
+          : "";
+
         return `
           <div class="card${mainClass}${mainBehindClass}${mergedClass}${expandedCardClass}">
             <div class="card-header">
               <div>
                 <div class="branch-name">${esc(wt.branch)}</div>
                 ${wt.baseBranch ? `<div class="base-branch">from ${esc(wt.baseBranch)}</div>` : ""}
+                ${prHtml}
                 ${behindRemoteHtml}
               </div>
               <span class="status-badge ${statusClass}">${statusLabels[wt.status] || wt.status}</span>

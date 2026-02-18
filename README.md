@@ -39,7 +39,7 @@ bun run dev -- ~/code/project-a ~/code/project-b --open
 
 ## PR merge detection
 
-If the [GitHub CLI](https://cli.github.com/) (`gh`) is installed and authenticated, the dashboard automatically detects when a worktree's branch has been merged via pull request — including squash merges. This runs on a 60-second polling interval to stay within API rate limits.
+If the [GitHub CLI](https://cli.github.com/) (`gh`) is installed and authenticated, the dashboard automatically detects when a worktree's branch has been merged via pull request — including squash merges. PR number, title, and a clickable link are shown on each card. This runs on a 60-second polling interval to stay within API rate limits.
 
 Without `gh`, merge detection falls back to local-only ancestry checks (which only detect regular merges after pulling the base branch).
 
@@ -50,7 +50,7 @@ The dashboard exposes JSON endpoints for external tooling and automation:
 - **`GET /api/state`** — full dashboard state (all worktrees with status, divergence, PR state, etc.)
 - **`GET /api/merged`** — just the merged worktrees, slim shape for cleanup scripts:
   ```json
-  [{ "repo": "my-project", "branch": "feature-x", "path": "/home/user/...", "repoPath": "/home/user/..." }]
+  [{ "repo": "my-project", "branch": "feature-x", "path": "/home/user/...", "repoPath": "/home/user/...", "pr": { "state": "merged", "number": 42, "title": "Add feature X", "url": "https://github.com/..." } }]
   ```
 
 Example — clean up all merged worktrees for a repo:

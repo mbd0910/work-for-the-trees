@@ -37,7 +37,12 @@ export interface UncommittedChanges {
 
 export type WorktreeStatus = "no-plan" | "planning" | "in-progress" | "idle" | "merged";
 
-export type PRState = "merged" | "open" | "closed";
+export interface PRInfo {
+  state: "merged" | "open" | "closed";
+  number: number;
+  title: string;
+  url: string;
+}
 
 export interface WorktreeData {
   repoName: string;
@@ -54,7 +59,7 @@ export interface WorktreeData {
   planFiles: PlanFile[];
   lastCommitTimestamp: string | null;
   mergedLocally: boolean;
-  prState: PRState | null;
+  pr: PRInfo | null;
   behindRemote: number | null;
 }
 
@@ -271,7 +276,7 @@ export function deriveStatus(
   commitsAhead: number,
   lastCommitTimestamp: string | null,
   mergedLocally: boolean = false,
-  prState: PRState | null = null,
+  prState: string | null = null,
   idleThresholdMs: number = 5 * 60 * 1000
 ): WorktreeStatus {
   if (mergedLocally || prState === "merged") return "merged";
@@ -362,24 +367,29 @@ export async function checkGhAvailable(): Promise<boolean> {
   }
 }
 
-export async function checkPRState(
+export async function checkPR(
   repoPath: string,
   branch: string
-): Promise<PRState | null> {
+): Promise<PRInfo | null> {
   try {
     const proc = Bun.spawn(
-      ["gh", "pr", "view", branch, "--json", "state", "-q", ".state"],
+      ["gh", "pr", "view", branch, "--json", "state,number,title,url"],
       { cwd: repoPath, stdout: "pipe", stderr: "pipe" }
     );
     const output = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
     if (exitCode !== 0) return null;
 
-    const state = output.trim().toUpperCase();
-    if (state === "MERGED") return "merged";
-    if (state === "OPEN") return "open";
-    if (state === "CLOSED") return "closed";
-    return null;
+    const data = JSON.parse(output.trim());
+    const state = (data.state as string)?.toUpperCase();
+    if (state !== "MERGED" && state !== "OPEN" && state !== "CLOSED") return null;
+
+    return {
+      state: state.toLowerCase() as PRInfo["state"],
+      number: data.number,
+      title: data.title,
+      url: data.url,
+    };
   } catch {
     return null;
   }
@@ -387,23 +397,23 @@ export async function checkPRState(
 
 export function applyRemoteState(
   state: DashboardState,
-  remoteCache: Map<string, PRState | null>,
+  remoteCache: Map<string, PRInfo | null>,
   behindRemoteCache: Map<string, number | null> = new Map()
 ): DashboardState {
   return {
     ...state,
     worktrees: state.worktrees.map((wt) => {
       const key = `${wt.repoPath}:${wt.branch}`;
-      const prState = remoteCache.get(key) ?? wt.prState;
+      const pr = remoteCache.get(key) ?? wt.pr;
       const behindRemote = behindRemoteCache.get(key) ?? wt.behindRemote;
       const status = deriveStatus(
         wt.planFiles,
         wt.commitsAhead,
         wt.lastCommitTimestamp,
         wt.mergedLocally,
-        prState
+        pr?.state ?? null
       );
-      return { ...wt, prState, behindRemote, status };
+      return { ...wt, pr, behindRemote, status };
     }),
   };
 }
@@ -453,7 +463,7 @@ async function getRepoWorktrees(repoPath: string): Promise<WorktreeData[]> {
         uncommitted,
         planFiles,
         mergedLocally,
-        prState: null,
+        pr: null,
         behindRemote: null,
       };
     })
