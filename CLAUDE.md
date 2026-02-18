@@ -24,7 +24,7 @@ The data flows in one direction: **git CLI → git.ts → watcher.ts → server.
 
 - **`src/watcher.ts`** — Three update mechanisms feed into a single `onUpdate` callback: chokidar watches `.claude/plans/` directories for instant plan file changes (debounced 300ms), a fast polling interval (3s) calls `getFullState` for git data, and a slow polling interval (60s) checks GitHub PR merge status via `gh` CLI. The remote cache is merged into state before broadcasting. Change detection uses `JSON.stringify` comparison to avoid no-op broadcasts. New worktrees are automatically picked up and their plan dirs added to chokidar.
 
-- **`src/server.ts`** — Hono app with `createBunWebSocket`. Tracks WebSocket clients in a `Set`. The watcher's `onUpdate` callback broadcasts state to all clients. New connections receive the current state immediately in `onOpen`. Debug endpoint at `GET /api/state`.
+- **`src/server.ts`** — Hono app with `createBunWebSocket`. Tracks WebSocket clients in a `Set`. The watcher's `onUpdate` callback broadcasts state to all clients. New connections receive the current state immediately in `onOpen`. Endpoints: `GET /api/state` (full dashboard state), `GET /api/merged` (slim list of merged worktrees for cleanup automation).
 
 - **`src/index.ts`** — CLI entry point. Validates each repo path is a git repo, then wires `createApp` → `start`.
 
@@ -40,7 +40,7 @@ The data flows in one direction: **git CLI → git.ts → watcher.ts → server.
 
 ## Critical constraint
 
-This is a **read-only** tool. It must NEVER write to, modify, or interfere with any watched repository. All git commands are read-only (`worktree list`, `log`, `diff`, `status`, `rev-parse`, `merge-base`, `rev-list`). All file access is read-only. The `gh pr view` command is also read-only (queries GitHub API, no local writes).
+This is a **read-only** tool. It must NEVER write to, modify, or interfere with any watched repository. All git commands are read-only (`worktree list`, `log`, `diff`, `status`, `rev-parse`, `merge-base`, `rev-list`, `ls-remote`). All file access is read-only. The `gh pr view` command is also read-only (queries GitHub API, no local writes).
 
 ## Optional dependency
 
