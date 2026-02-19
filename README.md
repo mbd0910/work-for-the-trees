@@ -43,6 +43,43 @@ If the [GitHub CLI](https://cli.github.com/) (`gh`) is installed and authenticat
 
 Without `gh`, merge detection falls back to local-only ancestry checks (which only detect regular merges after pulling the base branch).
 
+## Configuration
+
+Create `~/.config/work-for-the-trees/config.json` to configure persistent settings (see `config.example.json`):
+
+```json
+{
+  "ide": "cursor"
+}
+```
+
+### Open in IDE
+
+When `ide` is configured, each worktree card shows a button to open that worktree in your editor. Supported presets:
+
+| Preset | Editor |
+|--------|--------|
+| `code` | VS Code |
+| `cursor` | Cursor |
+| `zed` | Zed |
+| `subl` | Sublime Text |
+| `webstorm` | WebStorm |
+| `idea` | IntelliJ IDEA |
+
+For other editors, use a command template with `{path}` as the worktree path placeholder:
+
+```json
+{
+  "ide": "open -a Nova {path}"
+}
+```
+
+The `--ide` CLI flag overrides the config file for a single session:
+
+```bash
+work-for-the-trees ~/code/project --ide code
+```
+
 ## API
 
 The dashboard exposes JSON endpoints for external tooling and automation:

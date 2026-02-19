@@ -2,6 +2,7 @@
 
 import { resolve } from "node:path";
 import { createApp } from "./server.ts";
+import { loadConfig } from "./config.ts";
 
 function printUsage() {
   console.log(`
@@ -13,6 +14,7 @@ Usage:
 Options:
   --port <number>  Port to serve on (default: 4040)
   --open           Open browser automatically
+  --ide <name|cmd> IDE to open worktrees in (e.g. code, cursor, zed)
   --help, -h       Show this help
 
 Example:
@@ -26,6 +28,7 @@ function parseArgs(args: string[]) {
   const repoPaths: string[] = [];
   let port = 4040;
   let open = false;
+  let ide: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -35,6 +38,9 @@ function parseArgs(args: string[]) {
         console.error("Invalid port number");
         process.exit(1);
       }
+      i++;
+    } else if (arg === "--ide" && args[i + 1]) {
+      ide = args[i + 1];
       i++;
     } else if (arg === "--open") {
       open = true;
@@ -52,7 +58,7 @@ function parseArgs(args: string[]) {
     process.exit(1);
   }
 
-  return { repoPaths, port, open };
+  return { repoPaths, port, open, ide };
 }
 
 async function validateGitRepo(path: string): Promise<boolean> {
@@ -74,7 +80,14 @@ async function main() {
     }
   }
 
-  const { start } = createApp(args.repoPaths);
+  // Resolve IDE setting: CLI flag > config file
+  const config = await loadConfig();
+  const ide = args.ide ?? config.ide;
+  if (ide) {
+    console.log(`IDE configured: ${ide}`);
+  }
+
+  const { start } = createApp(args.repoPaths, ide);
   const { stop } = await start(args.port);
 
   if (args.open) {

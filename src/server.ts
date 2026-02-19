@@ -3,8 +3,9 @@ import { createBunWebSocket } from "hono/bun";
 import type { ServerWebSocket } from "bun";
 import { startWatching } from "./watcher.ts";
 import type { DashboardState } from "./git.ts";
+import { getIdeName, resolveIdeCommand } from "./ide.ts";
 
-export function createApp(repoPaths: string[]) {
+export function createApp(repoPaths: string[], ideCmd?: string) {
   const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
   const app = new Hono();
 
@@ -14,7 +15,8 @@ export function createApp(repoPaths: string[]) {
 
   function broadcast(state: DashboardState) {
     currentState = state;
-    const message = JSON.stringify(state);
+    const payload = ideCmd ? { ...state, ide: getIdeName(ideCmd) } : state;
+    const message = JSON.stringify(payload);
     for (const client of clients) {
       try {
         client.send(message);
@@ -32,8 +34,9 @@ export function createApp(repoPaths: string[]) {
 
   // Full state API
   app.get("/api/state", (c) => {
-    if (currentState) return c.json(currentState);
-    return c.json({ error: "Not ready" }, 503);
+    if (!currentState) return c.json({ error: "Not ready" }, 503);
+    const payload = ideCmd ? { ...currentState, ide: getIdeName(ideCmd) } : currentState;
+    return c.json(payload);
   });
 
   // Merged worktrees API — slim shape for cleanup automation
@@ -51,6 +54,30 @@ export function createApp(repoPaths: string[]) {
     return c.json(merged);
   });
 
+  // Open worktree in IDE
+  app.post("/api/open", async (c) => {
+    if (!ideCmd) {
+      return c.json({ error: "No IDE configured. Use --ide flag or config file." }, 400);
+    }
+    if (!currentState) {
+      return c.json({ error: "Not ready" }, 503);
+    }
+
+    const body = await c.req.json();
+    const targetPath = body?.path;
+    if (!targetPath || !currentState.worktrees.some((wt) => wt.path === targetPath)) {
+      return c.json({ error: "Unknown worktree path" }, 400);
+    }
+
+    const argv = resolveIdeCommand(ideCmd, targetPath);
+    try {
+      Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
+      return c.json({ ok: true });
+    } catch {
+      return c.json({ error: "Failed to launch IDE" }, 500);
+    }
+  });
+
   // WebSocket endpoint
   app.get(
     "/ws",
@@ -59,7 +86,8 @@ export function createApp(repoPaths: string[]) {
         const raw = ws.raw as ServerWebSocket;
         clients.add(raw);
         if (currentState) {
-          raw.send(JSON.stringify(currentState));
+          const payload = ideCmd ? { ...currentState, ide: getIdeName(ideCmd) } : currentState;
+          raw.send(JSON.stringify(payload));
         }
       },
       onClose(_event, ws) {

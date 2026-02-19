@@ -218,6 +218,32 @@
       border-left: 3px solid var(--status-merged);
     }
 
+    .open-ide-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 6px;
+      flex-shrink: 0;
+      align-self: flex-start;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .open-ide-btn:hover {
+      color: var(--text);
+      border-color: var(--text-dim);
+    }
+
+    .open-ide-btn svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
     .uncommitted {
       font-size: 12px;
       color: var(--text-muted);
@@ -361,6 +387,24 @@
       let currentState = null;
       let activeRepo = "all"; // "all" or a repoName
 
+      const IDE_ICONS = {
+        code: '<svg viewBox="0 0 24 24"><path d="M17.583 2.213a1.5 1.5 0 0 1 2.07.547l3.064 5.307a1.5 1.5 0 0 1-.547 2.07L4.917 21.787a1.5 1.5 0 0 1-2.07-.547L.783 15.933a1.5 1.5 0 0 1 .547-2.07L18.583 2.213zM23 12l-4.583 2.646L12 12l6.417-2.646L23 12z" fill-rule="evenodd"/></svg>',
+        cursor: '<svg viewBox="0 0 16 16"><path d="M2.5 1L13.5 8 8 9.5 5.5 15z"/></svg>',
+        zed: '<svg viewBox="0 0 16 16"><path d="M2 3h12L2 13h12M2 3v2M14 11v2"/><line x1="2" y1="3" x2="14" y2="3" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="14" y1="3" x2="2" y2="13" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>',
+        subl: '<svg viewBox="0 0 16 16"><path d="M3 4l10 3.5L3 11M3 12l10-3.5"/><line x1="3" y1="4" x2="13" y2="7.5" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="3" y1="8.5" x2="13" y2="12" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>',
+        webstorm: '<svg viewBox="0 0 16 16"><path d="M2 2h12v12H2zM3.5 3.5h5v1.2h-5zM3.5 12h6v-1.2h-6z" fill-rule="evenodd"/></svg>',
+        idea: '<svg viewBox="0 0 16 16"><path d="M2 2h12v12H2zM3.5 3.5h5v1.2h-5zM3.5 12h6v-1.2h-6z" fill-rule="evenodd"/></svg>',
+        custom: '<svg viewBox="0 0 16 16"><path d="M4.708 5.578L2.061 8.224l2.647 2.646M11.292 5.578l2.647 2.646-2.647 2.646" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      };
+
+      function openInIDE(path) {
+        fetch("/api/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        }).catch((err) => console.error("Failed to open IDE:", err));
+      }
+
       function connect() {
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         const ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -485,6 +529,10 @@
             card.classList.toggle("plan-expanded", !!hasExpanded);
           });
         });
+
+        grid.querySelectorAll(".open-ide-btn").forEach((btn) => {
+          btn.addEventListener("click", () => openInIDE(btn.dataset.path));
+        });
       }
 
       function renderCard(wt) {
@@ -515,6 +563,11 @@
           ? `<a class="pr-link pr-${wt.pr.state}" href="${esc(wt.pr.url)}" target="_blank">PR #${wt.pr.number}: ${esc(wt.pr.title)}</a>`
           : "";
 
+        const ideName = currentState && currentState.ide;
+        const openBtn = ideName
+          ? `<button class="open-ide-btn" data-path="${esc(wt.path)}" title="Open in ${esc(ideName)}">${IDE_ICONS[ideName] || IDE_ICONS.custom}</button>`
+          : "";
+
         return `
           <div class="card${mainClass}${mainBehindClass}${mergedClass}${expandedCardClass}">
             <div class="card-header">
@@ -524,6 +577,7 @@
                 ${prHtml}
                 ${behindRemoteHtml}
               </div>
+              ${openBtn}
               <span class="status-badge ${statusClass}">${statusLabels[wt.status] || wt.status}</span>
             </div>
             ${renderUncommitted(wt)}

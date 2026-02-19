@@ -69,6 +69,7 @@ export interface DashboardState {
   worktrees: WorktreeData[];
   updatedAt: string;
   remoteCheckedAt: string | null;
+  ide?: string;
 }
 
 // --- Git helpers ---
