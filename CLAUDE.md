@@ -14,7 +14,11 @@ Options: `--port <number>` (default 4040), `--open` (auto-open browser), `--ide 
 
 Multiple repo paths are supported — the dashboard shows all worktrees across all repos with a pill selector to filter by repo.
 
-No test suite yet — manual testing by pointing at repos with active worktrees.
+```bash
+bun test                                              # Run tests
+```
+
+Also test manually by pointing at repos with active worktrees.
 
 ## Architecture
 
@@ -44,7 +48,7 @@ The data flows in one direction: **git CLI → git.ts → watcher.ts → server.
 
 ## Plan file discovery
 
-Claude Code stores plan files globally in `~/.claude/plans/` with random names (e.g., `rosy-nibbling-puppy.md`) — not inside each worktree. To map plans back to worktrees, `buildPlanMapping` encodes each worktree path (replacing `/` with `-`) to find its project directory at `~/.claude/projects/<encoded-path>/`, then greps the 3 most recent session `.jsonl` files for plan file references. This mapping is cached and rebuilt every 60s. The assumption is that Claude Code uses the default `~/.claude/plans/` location — custom `plansDirectory` settings are not currently handled.
+Claude Code stores plan files globally in `~/.claude/plans/` with random names (e.g., `rosy-nibbling-puppy.md`) — not inside each worktree. To map plans back to worktrees, `buildPlanMapping` encodes each worktree path (replacing `/` with `-`) to find its project directory at `~/.claude/projects/<encoded-path>/`, then parses the 3 most recent session `.jsonl` files. The pure function `extractPlanNamesFromSessionContent` only extracts plan references from `tool_use` blocks in assistant messages (where Claude actually Read/Write/Edit a plan file) — ignoring `tool_result` content to avoid false positives from commands that happened to list plan files. This mapping is cached and rebuilt every 60s. The assumption is that Claude Code uses the default `~/.claude/plans/` location — custom `plansDirectory` settings are not currently handled.
 
 ## Critical constraint
 

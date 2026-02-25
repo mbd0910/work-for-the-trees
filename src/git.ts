@@ -242,6 +242,35 @@ export async function getUncommittedChanges(
   return result;
 }
 
+/**
+ * Extract plan filenames from a session JSONL file's content.
+ * Only looks at tool_use blocks in assistant messages (where Claude called
+ * Read/Write/Edit on a plan file). Ignores tool_result content to avoid
+ * false positives from commands that happened to list plan files.
+ */
+export function extractPlanNamesFromSessionContent(content: string): string[] {
+  const planNames = new Set<string>();
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    try {
+      const msg = JSON.parse(line);
+      if (msg.type !== "assistant") continue;
+      const blocks = msg.message?.content;
+      if (!Array.isArray(blocks)) continue;
+      for (const block of blocks) {
+        if (block.type !== "tool_use") continue;
+        const input = JSON.stringify(block.input ?? {});
+        for (const m of input.matchAll(
+          /\.claude\/plans\/([a-zA-Z0-9_-]+\.md)/g
+        )) {
+          planNames.add(m[1]);
+        }
+      }
+    } catch {}
+  }
+  return [...planNames];
+}
+
 export async function buildPlanMapping(
   worktreePaths: string[]
 ): Promise<Map<string, string[]>> {
@@ -271,16 +300,9 @@ export async function buildPlanMapping(
         const planNames = new Set<string>();
         for (const { file } of withStats.slice(0, 3)) {
           try {
-            const proc = Bun.spawn(
-              ["grep", "-oE", "\\.claude/plans/[a-zA-Z0-9_-]+\\.md", join(projectDir, file)],
-              { stdout: "pipe", stderr: "pipe" }
-            );
-            const output = await new Response(proc.stdout).text();
-            await proc.exited;
-            for (const line of output.trim().split("\n")) {
-              if (!line) continue;
-              const filename = line.split("/").pop();
-              if (filename) planNames.add(filename);
+            const text = await Bun.file(join(projectDir, file)).text();
+            for (const name of extractPlanNamesFromSessionContent(text)) {
+              planNames.add(name);
             }
           } catch {}
         }
