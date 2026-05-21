@@ -79,13 +79,15 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const output = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
     throw new Error(`git ${args[0]} failed: ${stderr}`);
   }
-  return output;
+  return stdout;
 }
 
 async function runGitSafe(cwd: string, args: string[]): Promise<string | null> {
@@ -271,12 +273,16 @@ export function extractPlanNamesFromSessionContent(content: string): string[] {
   return [...planNames];
 }
 
+export type PlanMappingCache = Map<string, { mtime: number; planNames: string[] }>;
+
 export async function buildPlanMapping(
-  worktreePaths: string[]
+  worktreePaths: string[],
+  cache?: PlanMappingCache
 ): Promise<Map<string, string[]>> {
   const home = homedir();
   const projectsDir = join(home, ".claude", "projects");
   const mapping = new Map<string, string[]>();
+  const touched = new Set<string>();
 
   await Promise.all(
     worktreePaths.map(async (wtPath) => {
@@ -291,20 +297,30 @@ export async function buildPlanMapping(
         // Sort by mtime descending, take the 3 most recent
         const withStats = await Promise.all(
           jsonlFiles.map(async (f) => {
-            const s = await stat(join(projectDir, f));
-            return { file: f, mtime: s.mtimeMs };
+            const filePath = join(projectDir, f);
+            const s = await stat(filePath);
+            return { filePath, mtime: s.mtimeMs };
           })
         );
         withStats.sort((a, b) => b.mtime - a.mtime);
 
         const planNames = new Set<string>();
-        for (const { file } of withStats.slice(0, 3)) {
-          try {
-            const text = await Bun.file(join(projectDir, file)).text();
-            for (const name of extractPlanNamesFromSessionContent(text)) {
-              planNames.add(name);
+        for (const { filePath, mtime } of withStats.slice(0, 3)) {
+          touched.add(filePath);
+          const cached = cache?.get(filePath);
+          let names: string[];
+          if (cached && cached.mtime === mtime) {
+            names = cached.planNames;
+          } else {
+            try {
+              const text = await Bun.file(filePath).text();
+              names = extractPlanNamesFromSessionContent(text);
+              cache?.set(filePath, { mtime, planNames: names });
+            } catch {
+              names = [];
             }
-          } catch {}
+          }
+          for (const name of names) planNames.add(name);
         }
 
         if (planNames.size > 0) {
@@ -313,6 +329,14 @@ export async function buildPlanMapping(
       } catch {}
     })
   );
+
+  // Evict cache entries we didn't touch this round so the cache tracks
+  // the current set of "most recent" files rather than growing unboundedly.
+  if (cache) {
+    for (const key of cache.keys()) {
+      if (!touched.has(key)) cache.delete(key);
+    }
+  }
 
   return mapping;
 }
@@ -456,8 +480,8 @@ export async function checkBehindRemote(
 export async function checkGhAvailable(): Promise<boolean> {
   try {
     const proc = Bun.spawn(["gh", "auth", "status"], {
-      stdout: "pipe",
-      stderr: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
     });
     return (await proc.exited) === 0;
   } catch {
@@ -474,11 +498,14 @@ export async function checkPR(
       ["gh", "pr", "view", branch, "--json", "state,number,title,url"],
       { cwd: repoPath, stdout: "pipe", stderr: "pipe" }
     );
-    const output = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
+    const [stdout, , exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
     if (exitCode !== 0) return null;
 
-    const data = JSON.parse(output.trim());
+    const data = JSON.parse(stdout.trim());
     const state = (data.state as string)?.toUpperCase();
     if (state !== "MERGED" && state !== "OPEN" && state !== "CLOSED") return null;
 

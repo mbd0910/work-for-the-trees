@@ -10,7 +10,7 @@ import {
   checkBehindRemote,
   applyRemoteState,
 } from "./git.ts";
-import type { DashboardState, PRInfo } from "./git.ts";
+import type { DashboardState, PRInfo, PlanMappingCache } from "./git.ts";
 
 export interface WatcherOptions {
   repoPaths: string[];
@@ -43,9 +43,11 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   const behindRemoteCache = new Map<string, number | null>();
 
   // Plan mapping cache: worktree path → global plan filenames
+  // Per-file parse cache keyed by JSONL path, invalidated by mtime.
+  const planParseCache: PlanMappingCache = new Map();
   const allWorktrees = await Promise.all(repoPaths.map(discoverWorktrees));
   const worktreePaths = allWorktrees.flat().map((wt) => wt.path);
-  let planMapping = await buildPlanMapping(worktreePaths);
+  let planMapping = await buildPlanMapping(worktreePaths, planParseCache);
   const planCount = [...planMapping.values()].reduce((sum, v) => sum + v.length, 0);
   console.log(`Plan mapping: found ${planCount} plan(s) across ${planMapping.size} worktree(s)`);
 
@@ -54,14 +56,16 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
   currentState = applyRemoteState(currentState, remoteCache, behindRemoteCache);
   onUpdate(currentState);
 
-  // Set up chokidar for plan file directories across all repos + global plans dir
+  // Set up chokidar for plan file directories across all repos + global plans dir.
+  // Track the watched set so we can add new worktrees and unwatch removed ones
+  // rather than letting chokidar accumulate stale dirs.
   const globalPlansDir = join(homedir(), ".claude", "plans");
-  const planDirs = [
+  const watchedDirs = new Set<string>([
     ...allWorktrees.flat().map((wt) => join(wt.path, ".claude", "plans")),
     globalPlansDir,
-  ];
+  ]);
 
-  const watcher = chokidar.watch(planDirs, {
+  const watcher = chokidar.watch([...watchedDirs], {
     ignoreInitial: true,
     depth: 0,
     persistent: true,
@@ -92,12 +96,22 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
       currentState = newState;
       onUpdate(currentState);
 
-      // Add any new worktree plan dirs to chokidar
-      const newPlanDirs = newState.worktrees.map((wt) =>
-        join(wt.path, ".claude", "plans")
-      );
-      for (const dir of newPlanDirs) {
-        watcher.add(dir);
+      // Reconcile chokidar's watch set with the current worktrees.
+      const desiredDirs = new Set<string>([
+        ...newState.worktrees.map((wt) => join(wt.path, ".claude", "plans")),
+        globalPlansDir,
+      ]);
+      for (const dir of desiredDirs) {
+        if (!watchedDirs.has(dir)) {
+          watcher.add(dir);
+          watchedDirs.add(dir);
+        }
+      }
+      for (const dir of watchedDirs) {
+        if (!desiredDirs.has(dir)) {
+          watcher.unwatch(dir);
+          watchedDirs.delete(dir);
+        }
       }
     }
   }, pollIntervalMs);
@@ -127,7 +141,7 @@ export async function startWatching(options: WatcherOptions): Promise<StopFn> {
             behindRemoteCache.set(`${wt.repoPath}:${wt.branch}`, behind);
           }),
       ]),
-      buildPlanMapping(currentWorktreePaths),
+      buildPlanMapping(currentWorktreePaths, planParseCache),
     ]);
     planMapping = newPlanMapping;
 
