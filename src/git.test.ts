@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { extractPlanNamesFromSessionContent } from "./git.ts";
+import { extractPlanNamesFromSessionContent, parseWorktreePorcelain } from "./git.ts";
+
+/** Helper to build a `git worktree list --porcelain` block */
+function porcelainBlock(path: string, head: string, branch?: string): string {
+  const lines = [`worktree ${path}`, `HEAD ${head}`];
+  lines.push(branch ? `branch refs/heads/${branch}` : "detached");
+  return lines.join("\n");
+}
 
 /** Helper to build a JSONL line for an assistant message with tool_use blocks */
 function assistantToolUse(
@@ -207,5 +214,67 @@ describe("extractPlanNamesFromSessionContent", () => {
     expect(extractPlanNamesFromSessionContent(lines)).toEqual([
       "epsilon-five.md",
     ]);
+  });
+});
+
+describe("parseWorktreePorcelain", () => {
+  test("parses path, head and branch for each worktree", () => {
+    const output = [
+      porcelainBlock("/code/zepho", "aaa111", "develop"),
+      porcelainBlock("/code/zepho-feat-issue-42", "bbb222", "feat/issue-42"),
+    ].join("\n\n");
+
+    expect(parseWorktreePorcelain(output)).toEqual([
+      { path: "/code/zepho", head: "aaa111", branch: "develop", isMainWorktree: true },
+      {
+        path: "/code/zepho-feat-issue-42",
+        head: "bbb222",
+        branch: "feat/issue-42",
+        isMainWorktree: false,
+      },
+    ]);
+  });
+
+  test("excludes Claude Code's own worktrees under .claude/worktrees/", () => {
+    const output = [
+      porcelainBlock("/code/zepho", "aaa111", "develop"),
+      porcelainBlock("/code/zepho/.claude/worktrees/wt-smoke", "ccc333", "worktree-wt-smoke"),
+      porcelainBlock("/code/zepho-feat-issue-42", "bbb222", "feat/issue-42"),
+    ].join("\n\n");
+
+    const paths = parseWorktreePorcelain(output).map((wt) => wt.path);
+    expect(paths).toEqual(["/code/zepho", "/code/zepho-feat-issue-42"]);
+  });
+
+  test("keeps the main worktree flag on the real main worktree after filtering", () => {
+    // A Claude Code worktree listed before a long-lived one must not let the
+    // long-lived one inherit isMainWorktree when it is filtered out.
+    const output = [
+      porcelainBlock("/code/zepho", "aaa111", "develop"),
+      porcelainBlock("/code/zepho/.claude/worktrees/one", "ccc333", "worktree-one"),
+      porcelainBlock("/code/zepho-feat-issue-42", "bbb222", "feat/issue-42"),
+    ].join("\n\n");
+
+    const result = parseWorktreePorcelain(output);
+    expect(result.filter((wt) => wt.isMainWorktree).map((wt) => wt.path)).toEqual([
+      "/code/zepho",
+    ]);
+  });
+
+  test("does not filter paths that merely mention claude elsewhere", () => {
+    const output = [
+      porcelainBlock("/code/zepho", "aaa111", "develop"),
+      porcelainBlock("/code/claude-worktrees-demo", "ddd444", "feat/demo"),
+    ].join("\n\n");
+
+    expect(parseWorktreePorcelain(output).map((wt) => wt.path)).toEqual([
+      "/code/zepho",
+      "/code/claude-worktrees-demo",
+    ]);
+  });
+
+  test("marks detached worktrees rather than dropping them", () => {
+    const output = porcelainBlock("/code/zepho-detached", "eee555");
+    expect(parseWorktreePorcelain(output)[0]?.branch).toBe("(detached)");
   });
 });

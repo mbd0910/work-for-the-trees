@@ -100,23 +100,39 @@ async function runGitSafe(cwd: string, args: string[]): Promise<string | null> {
 
 // --- Core functions ---
 
-export async function discoverWorktrees(repoPath: string): Promise<Worktree[]> {
-  const output = await runGit(repoPath, ["worktree", "list", "--porcelain"]);
+// Claude Code creates its own worktrees under .claude/worktrees/ for --worktree,
+// background sessions and `isolation: worktree` subagents, and sweeps them on its
+// own schedule. They are not ours to show or remove, so they never enter the
+// dashboard's view of the repo.
+function isClaudeCodeWorktree(path: string): boolean {
+  return path.includes("/.claude/worktrees/");
+}
+
+export function parseWorktreePorcelain(output: string): Worktree[] {
   const blocks = output.trim().split("\n\n");
 
-  return blocks.map((block, index) => {
-    const lines = block.split("\n");
-    const path =
-      lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length) ?? "";
-    const head =
-      lines.find((l) => l.startsWith("HEAD "))?.slice("HEAD ".length) ?? "";
-    const branchLine = lines.find((l) => l.startsWith("branch "));
-    const branch = branchLine
-      ? branchLine.slice("branch refs/heads/".length)
-      : "(detached)";
+  return blocks
+    .map((block, index) => {
+      const lines = block.split("\n");
+      const path =
+        lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length) ?? "";
+      const head =
+        lines.find((l) => l.startsWith("HEAD "))?.slice("HEAD ".length) ?? "";
+      const branchLine = lines.find((l) => l.startsWith("branch "));
+      const branch = branchLine
+        ? branchLine.slice("branch refs/heads/".length)
+        : "(detached)";
 
-    return { path, head, branch, isMainWorktree: index === 0 };
-  });
+      // isMainWorktree is derived from the pre-filter index: git always lists the
+      // main worktree first, and filtering must not promote another entry into it.
+      return { path, head, branch, isMainWorktree: index === 0 };
+    })
+    .filter((wt) => !isClaudeCodeWorktree(wt.path));
+}
+
+export async function discoverWorktrees(repoPath: string): Promise<Worktree[]> {
+  const output = await runGit(repoPath, ["worktree", "list", "--porcelain"]);
+  return parseWorktreePorcelain(output);
 }
 
 export async function detectBaseBranch(
