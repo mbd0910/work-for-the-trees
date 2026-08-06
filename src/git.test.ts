@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { extractPlanNamesFromSessionContent, parseWorktreePorcelain } from "./git.ts";
+import {
+  extractPlanNamesFromSessionContent,
+  parseOriginHead,
+  parseWorktreePorcelain,
+} from "./git.ts";
 
 /** Helper to build a `git worktree list --porcelain` block */
 function porcelainBlock(path: string, head: string, branch?: string): string {
@@ -276,5 +280,34 @@ describe("parseWorktreePorcelain", () => {
   test("marks detached worktrees rather than dropping them", () => {
     const output = porcelainBlock("/code/zepho-detached", "eee555");
     expect(parseWorktreePorcelain(output)[0]?.branch).toBe("(detached)");
+  });
+});
+
+describe("parseOriginHead", () => {
+  test("strips the remote prefix", () => {
+    expect(parseOriginHead("origin/develop")).toBe("develop");
+    expect(parseOriginHead("origin/main")).toBe("main");
+  });
+
+  test("keeps slashes inside the branch name", () => {
+    expect(parseOriginHead("origin/release/2.0")).toBe("release/2.0");
+  });
+
+  test("tolerates a non-origin remote name", () => {
+    expect(parseOriginHead("upstream/trunk")).toBe("trunk");
+  });
+
+  test("trims surrounding whitespace from git output", () => {
+    expect(parseOriginHead("origin/develop\n")).toBe("develop");
+  });
+
+  test("returns null when origin/HEAD is absent", () => {
+    expect(parseOriginHead(null)).toBeNull();
+    expect(parseOriginHead("")).toBeNull();
+    expect(parseOriginHead("   ")).toBeNull();
+  });
+
+  test("returns the input unchanged when it has no remote prefix", () => {
+    expect(parseOriginHead("develop")).toBe("develop");
   });
 });

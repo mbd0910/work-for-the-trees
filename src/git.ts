@@ -135,12 +135,67 @@ export async function discoverWorktrees(repoPath: string): Promise<Worktree[]> {
   return parseWorktreePorcelain(output);
 }
 
+const BASE_BRANCH_CANDIDATES = ["main", "master", "develop"];
+
+/**
+ * Strip the remote prefix from a `symbolic-ref --short` result:
+ * "origin/develop" -> "develop", "origin/release/2.0" -> "release/2.0".
+ */
+export function parseOriginHead(symbolicRef: string | null): string | null {
+  const trimmed = symbolicRef?.trim();
+  if (!trimmed) return null;
+  const slash = trimmed.indexOf("/");
+  return slash === -1 ? trimmed : trimmed.slice(slash + 1);
+}
+
+/**
+ * Turn a branch name into a ref that actually resolves in this worktree,
+ * preferring the local branch and falling back to the remote-tracking one.
+ * A repo worked on only through worktrees often has no local checkout of its
+ * own default branch, and callers use the result as a plain rev.
+ */
+async function resolvableBaseRef(
+  worktreePath: string,
+  name: string
+): Promise<string | null> {
+  const local = await runGitSafe(worktreePath, [
+    "rev-parse",
+    "--verify",
+    `refs/heads/${name}`,
+  ]);
+  if (local) return name;
+
+  const remote = await runGitSafe(worktreePath, [
+    "rev-parse",
+    "--verify",
+    `refs/remotes/origin/${name}`,
+  ]);
+  if (remote) return `origin/${name}`;
+
+  return null;
+}
+
 export async function detectBaseBranch(
   worktreePath: string
 ): Promise<string | null> {
-  const candidates = ["main", "master", "develop"];
+  // Primary: the remote's default branch, recorded in origin/HEAD. This is
+  // authoritative — it is what the remote reports and what Claude Code's own
+  // worktree creation uses — so it beats guessing from a list of common names.
+  // It is cached at clone time; `git remote set-head origin -a` refreshes it.
+  const originHead = parseOriginHead(
+    await runGitSafe(worktreePath, [
+      "symbolic-ref",
+      "--short",
+      "refs/remotes/origin/HEAD",
+    ])
+  );
+  if (originHead) {
+    const ref = await resolvableBaseRef(worktreePath, originHead);
+    if (ref) return ref;
+  }
 
-  // Fast path: check upstream tracking branch
+  // Secondary: the upstream tracking branch, but only when it names a
+  // conventional base. A feature branch tracks itself, which tells us nothing.
   const upstream = await runGitSafe(worktreePath, [
     "rev-parse",
     "--abbrev-ref",
@@ -148,27 +203,25 @@ export async function detectBaseBranch(
   ]);
   if (upstream) {
     const stripped = upstream.trim().replace(/^[^/]+\//, "");
-    if (candidates.includes(stripped)) {
-      return stripped;
+    if (BASE_BRANCH_CANDIDATES.includes(stripped)) {
+      const ref = await resolvableBaseRef(worktreePath, stripped);
+      if (ref) return ref;
     }
   }
 
-  // Fallback: shortest merge-base distance to a candidate branch
+  // Fallback, for clones with no origin/HEAD (--single-branch, shallow CI
+  // clones): shortest merge-base distance to a conventionally named branch.
   let bestBranch: string | null = null;
   let bestDistance = Infinity;
 
-  for (const candidate of candidates) {
-    const exists = await runGitSafe(worktreePath, [
-      "rev-parse",
-      "--verify",
-      candidate,
-    ]);
-    if (!exists) continue;
+  for (const candidate of BASE_BRANCH_CANDIDATES) {
+    const ref = await resolvableBaseRef(worktreePath, candidate);
+    if (!ref) continue;
 
     const mergeBase = await runGitSafe(worktreePath, [
       "merge-base",
       "HEAD",
-      candidate,
+      ref,
     ]);
     if (!mergeBase) continue;
 
@@ -181,7 +234,7 @@ export async function detectBaseBranch(
 
     if (count < bestDistance) {
       bestDistance = count;
-      bestBranch = candidate;
+      bestBranch = ref;
     }
   }
 
